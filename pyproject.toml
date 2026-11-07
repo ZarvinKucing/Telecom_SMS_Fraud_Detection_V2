@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fraud-security-platform"
+version = "0.1.0"
+description = "SMS-pumping fraud analytics, with a planned security-monitoring and IAM layer"
+requires-python = ">=3.11"
+dependencies = [
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "sqlalchemy>=2.0",
+  "alembic>=1.13",
+  "psycopg[binary]>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "bandit>=1.7", "pip-audit>=2.7"]
+
+[tool.setuptools.packages.find]
+include = ["common*", "fraud_engine*", "synthetic_data*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
