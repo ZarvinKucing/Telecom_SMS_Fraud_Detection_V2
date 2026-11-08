@@ -39,3 +39,4 @@ dist/
 .ruff_cache/
 .coverage
 htmlcov/
+*.bak
