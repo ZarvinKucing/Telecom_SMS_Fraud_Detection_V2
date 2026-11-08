@@ -1,9 +1,14 @@
-"""Alembic environment. STATUS: unexecuted in the authoring environment."""
+"""Alembic environment."""
+from pathlib import Path
+from dotenv import load_dotenv
 from alembic import context
 from sqlalchemy import create_engine
 
 from common.config import Settings
 from common.db.models import Base
+
+# Load .env from project root
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 target_metadata = Base.metadata
 
