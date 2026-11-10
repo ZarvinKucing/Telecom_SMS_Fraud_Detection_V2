@@ -1,4 +1,4 @@
-"""Phase 1 fraud core schema. STATUS: unexecuted in the authoring environment.
+"""Phase 1 fraud core schema. Verified on isolated PostgreSQL 16 test databases.
 
 Revision ID: 0001
 Revises:

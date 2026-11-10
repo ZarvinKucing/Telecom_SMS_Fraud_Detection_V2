@@ -6,9 +6,10 @@ Rules are plain data (see FraudRule) so they can later live in the fraud_rules t
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
@@ -44,6 +45,68 @@ class FraudRule:
             raise ValueError(f"rule {self.rule_key}: params must be positive numbers")
         if not 0 < self.weight <= 1:
             raise ValueError(f"rule {self.rule_key}: weight must be in (0, 1]")
+
+
+@dataclass(frozen=True)
+class RuleRecord:
+    """Persistable metadata for auxiliary detectors that do not use the rule evaluator."""
+    rule_key: str
+    rule_type: str
+    params: dict[str, Any]
+    weight: float
+    version: int = 1
+    enabled: bool = True
+
+
+class RuleMetadata(Protocol):
+    """Shared metadata shape for configurable rules and auxiliary detector records."""
+    rule_key: str
+    rule_type: str
+    params: dict[str, Any]
+    weight: float
+    version: int
+    enabled: bool
+
+
+RuleVersionKey = tuple[str, int]
+
+
+def rule_metadata_key(rule: RuleMetadata) -> RuleVersionKey:
+    return rule.rule_key, int(rule.version)
+
+
+def rule_metadata_values(rule: RuleMetadata) -> dict[str, Any]:
+    return {
+        "rule_key": rule.rule_key,
+        "version": int(rule.version),
+        "rule_type": rule.rule_type,
+        "params": dict(rule.params),
+        "weight": float(rule.weight),
+        "enabled": bool(rule.enabled),
+    }
+
+
+def detection_rule_metadata(
+    rules: Sequence[RuleMetadata], components: pd.DataFrame
+) -> dict[RuleVersionKey, RuleMetadata]:
+    """Index supplied metadata and reject components that cannot be explained/persisted."""
+    metadata: dict[RuleVersionKey, RuleMetadata] = {}
+    for rule in rules:
+        key = rule_metadata_key(rule)
+        previous = metadata.get(key)
+        if previous is not None and rule_metadata_values(previous) != rule_metadata_values(rule):
+            raise ValueError(f"conflicting metadata for rule version {key}")
+        metadata.setdefault(key, rule)
+
+    if not components.empty:
+        required = {
+            (str(rule_key), int(version))
+            for rule_key, version in zip(components["rule_key"], components["rule_version"], strict=True)
+        }
+        missing = required - metadata.keys()
+        if missing:
+            raise ValueError(f"missing metadata for component rule versions: {sorted(missing)}")
+    return metadata
 
 
 DEFAULT_RULES: tuple[FraudRule, ...] = (

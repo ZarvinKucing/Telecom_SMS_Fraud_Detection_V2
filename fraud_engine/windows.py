@@ -15,7 +15,21 @@ class Windows:
 
 
 def build_windows(records: pd.DataFrame, network_scope: Sequence[str] = ()) -> Windows:
-    df = records[["received_time", "network", "source_addr", "destination_addr"]].copy()
+    if records.empty:
+        return Windows(
+            pd.DataFrame(columns=["window_start", "network", "destination_addr", "msg_count", "distinct_senders"]),
+            pd.DataFrame(columns=["window_start", "network", "source_addr", "destination_addr", "msg_count"]),
+            pd.DataFrame(columns=["window_start", "network", "source_addr", "msg_count",
+                                  "distinct_destinations", "delivery_ratio"]),
+        )
+    columns = ["received_time", "network", "source_addr", "destination_addr"]
+    if "dlr_status" in records.columns:
+        columns.append("dlr_status")
+    df = records[columns].copy()
+    if "dlr_status" in df:
+        df["delivered"] = df["dlr_status"].astype(str).str.upper().eq("DELIVERED").astype(float)
+    else:
+        df["delivered"] = 0.0
     if network_scope:
         wanted = {n.lower() for n in network_scope}
         df = df[df["network"].str.lower().isin(wanted)]
@@ -26,6 +40,7 @@ def build_windows(records: pd.DataFrame, network_scope: Sequence[str] = ()) -> W
     sender_destination = (df.groupby(["window_start", "network", "source_addr", "destination_addr"], sort=True)
                           .size().rename("msg_count").reset_index())
     sender = (df.groupby(["window_start", "network", "source_addr"], sort=True)
-              .agg(msg_count=("destination_addr", "size"), distinct_destinations=("destination_addr", "nunique"))
+              .agg(msg_count=("destination_addr", "size"), distinct_destinations=("destination_addr", "nunique"),
+                   delivery_ratio=("delivered", "mean"))
               .reset_index())
     return Windows(destination, sender_destination, sender)

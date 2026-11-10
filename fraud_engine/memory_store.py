@@ -1,6 +1,8 @@
 """In-memory RecordStore with the same contract as PostgresStore (used by tests and offline runs)."""
 from __future__ import annotations
 
+from datetime import datetime
+
 import pandas as pd
 
 from fraud_engine.ingest import BatchInfo, LoadResult
@@ -31,3 +33,12 @@ class InMemoryStore:
 
     def to_frame(self) -> pd.DataFrame:
         return pd.DataFrame(list(self.records.values()))
+
+    def fetch_records(self, start: datetime, end: datetime) -> pd.DataFrame:
+        """Return the same half-open time window as PostgresStore for worker tests."""
+        frame = self.to_frame()
+        if frame.empty:
+            return pd.DataFrame(columns=["message_id", "received_time", "source_addr", "destination_addr",
+                                         "network", "dlr_status"])
+        times = pd.to_datetime(frame["received_time"], utc=True)
+        return frame.loc[(times >= start) & (times < end)].reset_index(drop=True)

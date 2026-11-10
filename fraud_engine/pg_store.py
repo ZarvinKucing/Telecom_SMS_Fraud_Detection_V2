@@ -2,11 +2,12 @@
 """PostgreSQL implementation of RecordStore plus detection persistence."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pandas as pd
-from sqlalchemy import Engine, create_engine, select, text, update
+from sqlalchemy import Connection, Engine, create_engine, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from common.db.models import (
@@ -18,7 +19,7 @@ from common.db.models import (
     SmsRecord,
 )
 from fraud_engine.ingest import BatchInfo, LoadResult
-from fraud_engine.rules import FraudRule
+from fraud_engine.rules import RuleMetadata, detection_rule_metadata, rule_metadata_values
 
 CHUNK = 1000
 
@@ -37,8 +38,22 @@ def _records(df: pd.DataFrame, batch_id: str) -> list[dict[str, object]]:
 
 
 class PostgresStore:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        connection_provider: Callable[[], Connection | None] | None = None,
+    ) -> None:
         self.engine = engine
+        self.connection_provider = connection_provider
+
+    @contextmanager
+    def _transaction_connection(self) -> Iterator[Connection]:
+        joined = self.connection_provider() if self.connection_provider else None
+        if joined is not None:
+            yield joined
+        else:
+            with self.engine.begin() as conn:
+                yield conn
 
     def batch_exists(self, file_sha256: str) -> bool:
         with self.engine.connect() as conn:
@@ -57,7 +72,7 @@ class PostgresStore:
     ) -> LoadResult:
         loaded = 0
 
-        with self.engine.begin() as conn:
+        with self._transaction_connection() as conn:
             conn.execute(
                 pg_insert(IngestBatch).values(
                     batch_id=batch.batch_id,
@@ -111,7 +126,7 @@ class PostgresStore:
         query = text(
             """
             SELECT message_id, received_time, source_addr,
-                   destination_addr, network
+                   destination_addr, network, dlr_status
             FROM sms_records
             WHERE received_time >= :start
               AND received_time < :end
@@ -127,11 +142,12 @@ class PostgresStore:
 
     def save_detection(
         self,
-        rules: Sequence[FraudRule],
+        rules: Sequence[RuleMetadata],
         alerts: pd.DataFrame,
         components: pd.DataFrame,
     ) -> None:
-        """Upsert alerts and replace their risk score components."""
+        """Upsert alerts and persist metadata for every associated score component."""
+        metadata = detection_rule_metadata(rules, components)
         keys = [
             "window_start",
             "entity_type",
@@ -139,20 +155,13 @@ class PostgresStore:
             "network",
         ]
 
-        with self.engine.begin() as conn:
+        with self._transaction_connection() as conn:
             rule_pk: dict[tuple[str, int], int] = {}
 
-            for r in rules:
+            for key, r in metadata.items():
                 conn.execute(
                     pg_insert(FraudRuleRow)
-                    .values(
-                        rule_key=r.rule_key,
-                        version=r.version,
-                        rule_type=r.rule_type,
-                        params=r.params,
-                        weight=r.weight,
-                        enabled=r.enabled,
-                    )
+                    .values(**rule_metadata_values(r))
                     .on_conflict_do_nothing(
                         index_elements=["rule_key", "version"]
                     )
@@ -160,12 +169,12 @@ class PostgresStore:
 
                 pk = conn.execute(
                     select(FraudRuleRow.rule_pk).where(
-                        FraudRuleRow.rule_key == r.rule_key,
-                        FraudRuleRow.version == r.version,
+                        FraudRuleRow.rule_key == key[0],
+                        FraudRuleRow.version == key[1],
                     )
                 ).scalar_one()
 
-                rule_pk[(r.rule_key, r.version)] = pk
+                rule_pk[key] = pk
 
             for a in alerts.to_dict("records"):
                 ws = pd.Timestamp(a["window_start"]).to_pydatetime()
@@ -209,7 +218,7 @@ class PostgresStore:
                         pg_insert(RiskScoreComponent).values(
                             alert_id=alert_id,
                             rule_pk=rule_pk[
-                                (c["rule_key"], int(c["rule_version"]))
+                                (str(c["rule_key"]), int(c["rule_version"]))
                             ],
                             severity=c["severity"],
                             evidence=c["evidence"],

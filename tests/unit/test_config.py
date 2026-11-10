@@ -17,6 +17,36 @@ class ConfigTests(unittest.TestCase):
     def test_network_scope_parsed(self):
         self.assertEqual(Settings.from_env({"NETWORK_SCOPE": " NET_A, NET_B ,"}).network_scope, ("NET_A", "NET_B"))
 
+    def test_api_settings_have_safe_defaults_and_parse_values(self):
+        defaults = Settings.from_env({})
+        self.assertIsNone(defaults.jwt_issuer)
+        self.assertIsNone(defaults.jwt_public_key_pem)
+        self.assertEqual((defaults.jwt_audience, defaults.max_ingest_bytes), ("fraud-api", 5_000_000))
+        configured = Settings.from_env({"JWT_ISSUER": "issuer", "JWT_AUDIENCE": "api",
+                                        "JWT_PUBLIC_KEY_PEM": "pem", "MAX_INGEST_BYTES": "1234"})
+        self.assertEqual((configured.jwt_issuer, configured.jwt_audience, configured.jwt_public_key_pem,
+                          configured.max_ingest_bytes), ("issuer", "api", "pem", 1234))
+
+    def test_invalid_runtime_limits_and_timezone_fail_closed(self):
+        for env in ({"MAX_INGEST_BYTES": "0"}, {"MAX_INGEST_BYTES": "not-an-int"},
+                    {"SOURCE_TIMEZONE": "Not/A_Timezone"}, {"JWT_AUDIENCE": "  "}):
+            with self.subTest(env=env), self.assertRaises(ConfigError):
+                Settings.from_env(env)
+
+    def test_openapi_is_disabled_by_default_and_public_only_in_development_or_test(self):
+        defaults = Settings.from_env({})
+        self.assertEqual((defaults.app_environment, defaults.openapi_public), ("production", False))
+        for environment in ("development", "test", "staging", "production"):
+            with self.subTest(environment=environment):
+                self.assertFalse(Settings.from_env({"APP_ENV": environment}).openapi_public)
+        self.assertTrue(Settings.from_env({"APP_ENV": "development", "OPENAPI_PUBLIC": "true"}).openapi_public)
+        self.assertTrue(Settings.from_env({"APP_ENV": "test", "OPENAPI_PUBLIC": "true"}).openapi_public)
+        for env in ({"APP_ENV": "production", "OPENAPI_PUBLIC": "true"},
+                    {"APP_ENV": "staging", "OPENAPI_PUBLIC": "true"},
+                    {"OPENAPI_PUBLIC": "perhaps"}):
+            with self.subTest(env=env), self.assertRaises(ConfigError):
+                Settings.from_env(env)
+
     def test_env_example_ships_no_credentials(self):
         for line in (ROOT / ".env.example").read_text().splitlines():
             if line.startswith(("POSTGRES_PASSWORD=", "DATABASE_URL=", "POSTGRES_USER=")):
